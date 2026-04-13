@@ -256,7 +256,7 @@ tbody tr.dragging{opacity:.4;}
     <div class="sync-badge err" id="syncBadge"><span class="sync-dot"></span><span id="syncTxt">No DB</span></div>
     <button class="btn btn-ghost btn-sm" onclick="openFB()" id="fbBtn">🔥 Connect DB</button>
     <button class="btn btn-ghost btn-sm" onclick="openCatMgr()">⚙ Cats</button>
-    <button class="btn btn-ghost btn-sm" onclick="openAIKey()">⚡ AI Key</button>
+
   </div>
 </header>
 
@@ -268,12 +268,7 @@ tbody tr.dragging{opacity:.4;}
   <div class="tab-actions" id="tabActions"></div>
 </div>
 
-<div id="apiBanner" class="api-banner" style="display:none">
-  ⚡ Anthropic API key:
-  <input type="password" id="apiKeyInput" placeholder="sk-ant-...">
-  <button class="btn btn-primary btn-sm" onclick="saveApiKey()">Save</button>
-  <button class="btn btn-ghost btn-sm" onclick="document.getElementById('apiBanner').style.display='none'">✕</button>
-</div>
+
 <div id="progWrap" style="display:none">
   <div class="prog-wrap">
     <div class="prog-bar"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
@@ -291,8 +286,11 @@ tbody tr.dragging{opacity:.4;}
     <div id="sbCats"></div>
     <div class="sb-sec" style="margin-top:4px">AI</div>
     <div style="padding:4px 8px;display:flex;flex-direction:column;gap:4px;">
-      <button class="btn btn-primary" style="width:100%;font-size:11px" onclick="runAI()">⚡ AI Categorize Uncategorized</button>
-      <button class="btn btn-ghost" style="width:100%;font-size:10px" onclick="runAI(true)">⚡ Re-run All</button>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:4px;">Quick-set Uncategorized:</div>
+      <select id="quickCatSel" style="width:100%;font-size:11px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);margin-bottom:6px;" onchange="quickCatAll(this.value)">
+        <option value="">— pick category —</option>
+      </select>
+      <div style="font-size:10px;color:var(--text3);">Or use checkboxes + bulk bar below.</div>
     </div>
   </aside>
 
@@ -703,7 +701,7 @@ let crmStaged=[],crmH=[],histStaged=[],histH=[],wStaged=[],wH=[];
 
 function init(){
   loadCats();
-  if(!localStorage.getItem(API_KEY))document.getElementById('apiBanner').style.display='flex';
+
   if(window._FB)tryConn();else window.addEventListener('fbReady',tryConn);
   renderTabActions();
 }
@@ -797,6 +795,7 @@ async function batchSave(coll,arr,onProg){
       unsubW=onSnapshot(collection(db,'weekly'),s=>{weeklyRows=s.docs.map(d=>({...d.data(),id:d.id}));renderWeekly();updTC();},e=>{});
     else if(coll==='campaignLog'&&!unsubCL)
       unsubCL=onSnapshot(collection(db,'campaignLog'),s=>{campaignLog=s.docs.map(d=>({...d.data(),id:d.id}));renderCampaignLog();updTC();},e=>{});
+    unsubCL=onSnapshot(collection(db,'campaignLog'),s=>{campaignLog=s.docs.map(d=>({...d.data(),id:d.id}));renderCampaignLog();updTC();},e=>{});
   }else saveLocal();
 }
 async function saveOne(coll,obj){if(db){try{const{doc,setDoc}=window._FB;await setDoc(doc(db,coll,obj.id),cln(obj));}catch(e){toast('Save err','err');}}else saveLocal();}
@@ -852,11 +851,10 @@ function renderTabActions(){
 
 function updTC(){document.getElementById('tc-all').textContent=contacts.length.toLocaleString();document.getElementById('tc-hist').textContent=histRows.length.toLocaleString();document.getElementById('tc-weekly').textContent=weeklyRows.length.toLocaleString();const clEl=document.getElementById('tc-cl');if(clEl)clEl.textContent=campaignLog.length.toLocaleString();}
 
-function openAIKey(){document.getElementById('apiBanner').style.display='flex';}
-function saveApiKey(){const vv=document.getElementById('apiKeyInput').value.trim();if(!vv)return;localStorage.setItem(API_KEY,vv);document.getElementById('apiBanner').style.display='none';document.getElementById('apiKeyInput').value='';toast('API key saved!','ok');}
+
 
 // RENDER ALL
-function renderAll3(){renderAll();renderHist();renderWeekly();}
+function renderAll3(){renderAll();renderHist();renderWeekly();populateQuickCatSel();}
 
 function renderSidebar(){
   const counts={};cNames().forEach(n=>counts[n]=0);let uncat=0,mapped=0;
@@ -1041,11 +1039,6 @@ async function changeCat(sel){
   l.category=sel.value;await saveOne(coll,l);
   if(coll==='contacts'){renderSidebar();}else renderWeekly();
   const c=cColor(sel.value);sel.style.color=sel.value?c:'';sel.style.borderColor=sel.value?c+'33':'';
-  // Auto-sync Weekly category → All Contacts
-  if(coll==='weekly'&&l.matchedContactId){
-    const contact=contacts.find(x=>x.id===l.matchedContactId);
-    if(contact){contact.category=sel.value;await saveOne('contacts',contact);renderSidebar();toast('Category synced → All Contacts','ok');}
-  }
 }
 
 // CRM IMPORT
@@ -1170,31 +1163,15 @@ async function doWeekly(){
   const ec=v('w-email'),nc=v('w-name');const label=document.getElementById('w-label').value.trim()||'Weekly';
   if(!ec&&!nc){toast('Map email or name','err');return;}
 
-  // CLEAR existing weekly data first — always purge Firestore directly to avoid race conditions
+  // CLEAR existing weekly data first — weekly tab shows ONLY this week
   document.getElementById('progWrap').style.display='block';
   document.getElementById('progFill').style.width='5%';
   document.getElementById('progTxt').textContent='Clearing previous batch...';
-
-  // Pause the weekly listener immediately to prevent mid-operation snapshot fires
-  if(unsubW){unsubW();unsubW=null;}
-
-  // Always do a live Firestore fetch so we catch rows that loaded after page open
-  if(db){
-    try{
-      const{collection,getDocs,writeBatch,doc,onSnapshot}=window._FB;
-      const snap=await getDocs(collection(db,'weekly'));
-      if(!snap.empty){
-        const allIds=snap.docs.map(d=>d.id);
-        setSS('busy','Clearing old batch...');
-        for(let i=0;i<allIds.length;i+=400){
-          const b=writeBatch(db);
-          allIds.slice(i,i+400).forEach(id=>b.delete(doc(db,'weekly',id)));
-          await b.commit();
-        }
-      }
-    }catch(e){toast('Clear error: '+e.message,'err');}
+  if(weeklyRows.length){
+    const oldIds=weeklyRows.map(r=>r.id);
+    weeklyRows=[];selW.clear();
+    await batchDel('weekly',oldIds);
   }
-  weeklyRows=[];selW.clear();
 
   const emap=new Map(contacts.map(l=>[(l.email||'').toLowerCase().trim(),l]));
   const newW=[];
@@ -1300,29 +1277,20 @@ function showHD(id){
 }
 
 // AI
-async function runAI(rerunAll=false){
-  const ak=localStorage.getItem(API_KEY);if(!ak){document.getElementById('apiBanner').style.display='flex';toast('Add API key first','err');return;}
-  const proc=rerunAll?contacts.filter(l=>l.category!=='WS/BS Sale'):contacts.filter(l=>!l.category);
-  if(!proc.length){toast('All categorized','info');return;}
-  abortFlag=false;document.getElementById('progWrap').style.display='block';document.getElementById('progTxt').textContent='Preparing AI...';
-  const BATCH=60;let done=0;
-  const catDesc=cats.map(c=>'- '+c.name).join('\n')+'\n- Uncategorized';
-  for(let i=0;i<proc.length;i+=BATCH){
-    if(abortFlag)break;
-    const batch=proc.slice(i,i+BATCH);const items=batch.map(l=>({id:l.id,company:l.company||l.name,tags:l.tags||''}));
-    try{
-      const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':ak,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2000,messages:[{role:'user',content:'Categorize CRM leads for All Sport Netting (sports netting company).\n\nCategories:\n- Parks & Rec: municipal parks, rec departments\n- Sports Facility: stadiums, sports complexes, batting cages, golf courses, fieldhouses\n- General Contractor: general construction, building contractors\n- Service Contractor: architects, fence contractors, landscape, turf, court surfacing\n- WS/BS Sale: ONLY if tags show existing customer\n- School: K-12, universities, colleges\n- Studio: film/TV studios, creative agencies\n- Event Company: event planning, management'+cats.filter(c=>!DEFAULT_CATS.find(d=>d.name===c.name)).map(c=>'\n- '+c.name+': custom').join('')+'\n- Uncategorized: unclear\n\nReturn ONLY JSON: [{"id":"...","category":"..."}]\n\nLeads:\n'+JSON.stringify(items)}]})});
-      if(!res.ok){const e=await res.json().catch(()=>({}));toast('API error: '+(e?.error?.message||res.statusText),'err');break;}
-      const data=await res.json();const txt=(data.content||[]).map(c=>c.text||'').join('');
-      const results=JSON.parse(txt.replace(/```json|```/g,'').trim());
-      const all=[...cNames(),'Uncategorized'];const toSave=[];
-      results.forEach(({id,category})=>{if(!all.includes(category))return;const l=contacts.find(x=>x.id===id);if(l&&l.category!=='WS/BS Sale'){l.category=category;toSave.push(l);}});
-      await batchSave('contacts',toSave);renderAll();
-    }catch(e){toast('Error: '+e.message,'err');break;}
-    done+=batch.length;const p=Math.round(done/proc.length*100);document.getElementById('progFill').style.width=p+'%';document.getElementById('progTxt').textContent='AI categorizing '+done.toLocaleString()+'/'+proc.length.toLocaleString()+'...';
-    await sleep(250);
-  }
-  document.getElementById('progWrap').style.display='none';renderAll();toast('AI done!','ok');
+async function quickCatAll(cat){
+  if(!cat)return;
+  const proc=contacts.filter(l=>!l.category);
+  if(!proc.length){toast('No uncategorized leads','info');document.getElementById('quickCatSel').value='';return;}
+  proc.forEach(l=>l.category=cat);
+  await batchSave('contacts',proc);
+  renderAll();
+  toast('Set '+proc.length+' leads → "'+cat+'"','ok');
+  document.getElementById('quickCatSel').value='';
+}
+
+function populateQuickCatSel(){
+  const sel=document.getElementById('quickCatSel');if(!sel)return;
+  sel.innerHTML='<option value="">— pick category —</option>'+cNames().map(c=>'<option value="'+c+'">'+c+'</option>').join('')+'<option value="Uncategorized">Uncategorized</option>';
 }
 
 // CATEGORY MANAGER
@@ -1583,11 +1551,6 @@ async function changeLeadStatus(sel, id, coll) {
   // If the row is in a table, update row class
   const tr = sel.closest('tr');
   if (tr) { tr.classList.toggle('row-dnc', sel.value === 'dnc'); }
-  // Auto-sync Weekly lead status → All Contacts
-  if(coll==='weekly'&&row.matchedContactId){
-    const contact=contacts.find(x=>x.id===row.matchedContactId);
-    if(contact){contact.leadStatus=sel.value;await saveOne('contacts',contact);toast('Lead status synced → All Contacts','ok');}
-  }
 }
 
 function styleLeadSel(sel, val) {
@@ -1976,12 +1939,11 @@ function updateLeadColHeader(tab) {
   const selCount = selected
     ? [...filterLead[tab]].reduce((s,v) => s + (counts[v]||0), 0)
     : total;
-  const pills = Object.entries({hot:'🔥',warm:'☀',cold:'❄',dnc:'🚫','':'—'})
+  const pills = Object.entries({hot:'🔥',warm:'☀',cold:'❄',dnc:'🚫'})
     .map(([v,ico]) => {
       const n = counts[v]||0;
       const active = filterLead[tab] && filterLead[tab].has(v);
-      const colorMap = {hot:'#e74c3c',warm:'#f39c12',cold:'#3498db',dnc:'#c0392b','':'#5a6070'};
-      return '<span onclick="toggleLeadFilter(\''+tab+'\',\''+v+'\',this)" style="cursor:pointer;font-size:9px;padding:1px 4px;border-radius:3px;margin:0 1px;'+(active?'background:'+colorMap[v]+';color:#fff':'color:var(--text3)')+'">'+ico+' '+n+'</span>';
+      return '<span onclick="toggleLeadFilter(\''+tab+'\',\''+v+'\',this)" style="cursor:pointer;font-size:9px;padding:1px 4px;border-radius:3px;margin:0 1px;'+(active?'background:'+{hot:'#e74c3c',warm:'#f39c12',cold:'#3498db',dnc:'#c0392b'}[v]+';color:#fff':'color:var(--text3)')+'">'+ico+' '+n+'</span>';
     }).join('');
   th.innerHTML = 'Lead Status'+(selected?' <span style="color:var(--accent);font-size:9px">('+selCount+')</span>':'')+'<br><span style="font-weight:400">'+pills+'</span>';
 }
@@ -2087,12 +2049,12 @@ function renderCampaignLog() {
       editCell(c.date, 'date', 'Add date') +
       editCell(c.subject, 'subject', 'Add subject') +
       editCell(c.cta, 'cta', 'Add CTA') +
-      numCell(c.total,'total') +
-      '<td><span class="cl-badge cl-new" style="cursor:pointer;border-bottom:1px dotted var(--green)" onclick="drillDown(\''+c.id+'\',\'newClickers\')" title="Click to view new clickers">' + (c.newClickers||0) + '</span></td>' +
-      '<td><span class="cl-badge cl-repeat" style="cursor:pointer;border-bottom:1px dotted var(--accent)" onclick="drillDown(\''+c.id+'\',\'repeatClickers\')" title="Click to view repeat clickers">' + (c.repeatClickers||0) + '</span></td>' +
-      numCell(c.wsbs,'wsbs') + numCell(c.contractors,'contractors') + numCell(c.facilities,'facilities') +
-      numCell(c.clubs,'clubs') + numCell(c.studioEvent,'studioEvent') + numCell(c.schools,'schools') +
-      numCell(c.parks,'parks') + numCell(c.other,'other') +
+      '<td><strong>' + (c.total||0) + '</strong></td>' +
+      '<td><span class="cl-badge cl-new">' + (c.newClickers||0) + '</span></td>' +
+      '<td><span class="cl-badge cl-repeat">' + (c.repeatClickers||0) + '</span></td>' +
+      numCell(c.wsbs) + numCell(c.contractors) + numCell(c.facilities) +
+      numCell(c.clubs) + numCell(c.studioEvent) + numCell(c.schools) +
+      numCell(c.parks) + numCell(c.other) +
       '<td><button class="del-btn" title="Delete" onclick="deleteCampaignLog(\'' + c.id + '\')">✕</button></td>';
     tbody.appendChild(tr);
   });
