@@ -725,7 +725,16 @@ function openFB(){
 function closeFB(){document.getElementById('fbModal').style.display='none';}
 function parseFBP(){
   const raw=document.getElementById('fbPaste').value;
-  try{const m=raw.match(/\{[\s\S]*\}/);if(!m)return;const j=m[0].replace(/(\w+)\s*:/g,'"$1":').replace(/'/g,'"').replace(/,([\s\n]*[}\]])/g,'$1');const c=JSON.parse(j);const map={apiKey:'fb_api',projectId:'fb_proj',authDomain:'fb_auth',storageBucket:'fb_bucket',messagingSenderId:'fb_sender',appId:'fb_appid'};Object.entries(map).forEach(([k,id])=>{if(c[k])document.getElementById(id).value=c[k];});}catch(e){}
+  if(!raw.trim())return;
+  const fields={apiKey:'fb_api',projectId:'fb_proj',authDomain:'fb_auth',storageBucket:'fb_bucket',messagingSenderId:'fb_sender',appId:'fb_appid'};
+  let found=0;
+  Object.entries(fields).forEach(([key,id])=>{
+    const re=new RegExp(key+'\\s*:\\s*["\']([^"\']+)["\']');
+    const m=raw.match(re);
+    if(m&&m[1]){document.getElementById(id).value=m[1].trim();found++;}
+  });
+  if(found===0)toast('Could not parse — fill fields manually','err');
+  else toast('Filled '+found+' fields from config','ok');
 }
 async function connectFB(ec,silent){
   const cfg=ec||{apiKey:v('fb_api'),authDomain:v('fb_auth'),projectId:v('fb_proj'),storageBucket:v('fb_bucket'),messagingSenderId:v('fb_sender'),appId:v('fb_appid')};
