@@ -742,7 +742,7 @@ async function connectFB(ec,silent){
   setSS('busy','Connecting...');
   if(unsubC)unsubC();if(unsubH)unsubH();if(unsubW)unsubW();
   try{
-    const{initializeApp,getApps,getApp,getFirestore,collection,onSnapshot}=window._FB;
+    const{initializeApp,getApps,getApp,getFirestore,collection,doc,onSnapshot}=window._FB;
     const n='asn4-'+cfg.projectId;
     const app=getApps().find(a=>a.name===n)?getApp(n):initializeApp(cfg,n);
     db=getFirestore(app);setSS('busy','Loading...');
