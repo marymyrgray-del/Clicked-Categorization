@@ -683,6 +683,7 @@ tbody tr.dragging{opacity:.4;}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script type="module">
 import{initializeApp,getApps,getApp}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import{getFirestore,collection,doc,setDoc,deleteDoc,onSnapshot,writeBatch,getDocs}from'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
@@ -1885,11 +1886,9 @@ function doExport() {
   if (!checkedCols.length) { toast('Select at least one column', 'err'); return; }
   const fmt = document.querySelector('input[name="expfmt"]:checked')?.value || 'csv';
   const scope = document.querySelector('input[name="expscope"]:checked')?.value || 'filtered';
-  const sep = fmt === 'tsv' ? '\t' : ',';
 
   // Get rows based on scope
   let rows;
-  // Category filter from export modal
   const expCatSel = [...document.querySelectorAll('#exp-cat-filter .fp-cat.sel')].map(b=>b.dataset.v).filter(v=>v!=='__all__');
   const filterByCat = arr => expCatSel.length ? arr.filter(r=>expCatSel.includes(r.category||'Uncategorized')) : arr;
 
@@ -1904,27 +1903,47 @@ function doExport() {
     rows = filterByCat(getFilteredSorted(tab));
   }
 
+  if (!rows.length) { toast('No records to export', 'err'); return; }
+
   const cols = EXP_COLS[tab].filter(c => checkedCols.includes(c.k));
   const header = cols.map(c => c.l);
-  const dataRows = rows.map(r => cols.map(c => {
+  const fn = 'asn_' + tab + '_' + new Date().toISOString().slice(0,10);
+
+  const getCellVal = (r, c) => {
     if (c.k === 'history_count') return (r.history||[]).length;
     if (c.k === 'history_dates') return (r.history||[]).map(h=>h.date+(h.category?' ('+h.category+')':'')).join(' | ');
     if (c.k === 'mappedFromHistory') return r.mappedFromHistory ? 'Yes' : 'No';
     if (c.k === 'matchedToAll') return r.matchedToAll ? 'Yes' : 'No';
     if (c.k === 'leadStatus') return LEAD_LABELS[r.leadStatus||autoLeadStatus(r)]||'';
     return r[c.k] || '';
-  }));
-
-  const csvFn = v => {
-    const s = String(v||'');
-    return (s.includes(sep)||s.includes('"')||s.includes('\n')) ? '"'+s.replace(/"/g,'""')+'"' : s;
   };
-  const lines = [header.map(csvFn).join(sep), ...dataRows.map(row => row.map(csvFn).join(sep))];
-  const blob = new Blob(['\uFEFF' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url;
-  a.download = 'asn_' + tab + '_' + new Date().toISOString().slice(0,10) + '.' + (fmt==='tsv'?'tsv':'csv');
-  a.click(); URL.revokeObjectURL(url);
+
+  if (fmt === 'xlsx') {
+    if (typeof XLSX === 'undefined') { toast('Excel library not loaded, try CSV instead', 'err'); return; }
+    const dataRows = rows.map(r => cols.map(c => getCellVal(r, c)));
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+    // Auto column widths
+    ws['!cols'] = header.map((h, i) => {
+      const maxLen = Math.max(h.length, ...dataRows.map(row => String(row[i]||'').length));
+      return { wch: Math.min(Math.max(maxLen + 2, 10), 50) };
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, tab.charAt(0).toUpperCase()+tab.slice(1));
+    XLSX.writeFile(wb, fn + '.xlsx');
+  } else {
+    const sep = fmt === 'tsv' ? '\t' : ',';
+    const csvFn = v => {
+      const s = String(v||'');
+      return (s.includes(sep)||s.includes('"')||s.includes('\n')) ? '"'+s.replace(/"/g,'""')+'"' : s;
+    };
+    const dataRows = rows.map(r => cols.map(c => getCellVal(r, c)));
+    const lines = [header.map(csvFn).join(sep), ...dataRows.map(row => row.map(csvFn).join(sep))];
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url;
+    a.download = fn + '.' + (fmt==='tsv'?'tsv':'csv');
+    a.click(); URL.revokeObjectURL(url);
+  }
   closeExport();
   toast('Exported ' + rows.length.toLocaleString() + ' rows', 'ok');
 }
@@ -2264,6 +2283,7 @@ init();
     <div class="exp-fmt">
       <label><input type="radio" name="expfmt" value="csv" checked> CSV</label>
       <label><input type="radio" name="expfmt" value="tsv"> TSV (Tab)</label>
+      <label><input type="radio" name="expfmt" value="xlsx"> Excel (.xlsx)</label>
     </div>
     <div style="font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:7px">Scope:</div>
     <div class="exp-fmt" id="exp-scope">
