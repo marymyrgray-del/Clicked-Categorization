@@ -1852,7 +1852,7 @@ function openExport(tab) {
     updateExpCount(tab);
   };
   expCatDiv.appendChild(allB);
-  allCatNames.forEach(name => {
+  allExpCats.forEach(name => {
     if (!catCounts[name]) return;
     const c = cats.find(x=>x.name===name);
     const color = c?c.color:'#4a5568';
